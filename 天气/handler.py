@@ -27,8 +27,8 @@ def handle_tool_call(raw_call: dict) -> ToolResult:
             error_type="network",
         )
 
-    except requests.HTTPError:
-        logger.warning("天气服务返回错误状态")
+    except requests.HTTPError as error:
+        logger.warning("天气服务返回错误状态：%s", error)
 
         return ToolResult(
             status="error",
