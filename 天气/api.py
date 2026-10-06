@@ -1,8 +1,8 @@
 import logging
 import sqlite3
 import sys
-
-from fastapi import FastAPI, HTTPException
+import os
+from fastapi import FastAPI, Header, HTTPException
 from openai import OpenAIError, RateLimitError
 from pydantic import BaseModel, field_validator
 from 天气.model_client import ModelConfigurationError, run_agent
@@ -16,7 +16,6 @@ from 天气.database import (
     load_messages,
     session_exists,
 )
-
 
 
 logging.basicConfig(
@@ -113,7 +112,15 @@ def get_session_history(
     )
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(
+    request: ChatRequest,
+    x_chat_key: str | None = Header(default=None),
+) -> ChatResponse:
+    expected_key = os.getenv("CHAT_ACCESS_KEY")
+    if not expected_key:
+        raise HTTPException(status_code=503, detail="聊天访问口令未配置")
+    if x_chat_key != expected_key:
+        raise HTTPException(status_code=401, detail="聊天访问口令错误")
     logger.info(f"开始处理聊天请求：session_id={request.session_id}")
 
     try:

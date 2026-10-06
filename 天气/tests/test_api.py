@@ -12,8 +12,10 @@ import logging
 
 
 client = TestClient(app)
+client.headers["X-Chat-Key"] = "test-chat-key"
 @pytest.fixture(autouse=True)
 def isolated_database(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAT_ACCESS_KEY", "test-chat-key")
     monkeypatch.setattr(
         database,
         "DATABASE_PATH",
@@ -66,6 +68,22 @@ def test_chat_returns_agent_answer(
         user_message="广州天气",
         history=[],
     )
+
+
+def test_chat_rejects_wrong_access_key(monkeypatch, session_id: str):
+    mock_run_agent = Mock()
+    monkeypatch.setattr("天气.api.run_agent", mock_run_agent)
+
+    response = client.post(
+        "/chat",
+        headers={"X-Chat-Key": "wrong-key"},
+        json={"session_id": session_id, "message": "广州天气"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "聊天访问口令错误"}
+    mock_run_agent.assert_not_called()
+    assert database.load_messages(session_id) == []
 
 
 def test_chat_rejects_blank_message(monkeypatch):

@@ -9,7 +9,7 @@
 - `MODEL_API_KEY`：模型平台的密钥。
 - `MODEL_BASE_URL`：模型平台的接口地址。
 - `MODEL_NAME`：要使用的模型名称；不填写时使用代码中的默认值。
-
+- `CHAT_ACCESS_KEY`：聊天接口的访问口令。调用 `/chat` 时，在请求头 `X-Chat-Key` 中填写相同的值。
 `.env` 含有密钥，不要提交到 Git。
 
 ## 天气请求配置（可选）
