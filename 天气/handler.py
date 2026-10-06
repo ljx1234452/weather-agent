@@ -30,6 +30,13 @@ def handle_tool_call(raw_call: dict) -> ToolResult:
     except requests.HTTPError as error:
         logger.warning("天气服务返回错误状态：%s", error)
 
+        if error.response is not None and error.response.status_code == 429:
+            return ToolResult(
+                status="error",
+                error="天气查询过于频繁，请稍后再试",
+                error_type="network",
+            )
+
         return ToolResult(
             status="error",
             error="天气服务暂时不可用，请稍后重试",

@@ -136,3 +136,21 @@ def test_weather_http_error_returns_error(
         city="Guangzhou",
         days=3,
     )
+
+
+def test_weather_429_returns_rate_limit_message(
+    valid_weather_call: dict,
+    monkeypatch,
+):
+    response = requests.Response()
+    response.status_code = 429
+    error = requests.HTTPError("请求过多", response=response)
+
+    monkeypatch.setattr(
+        "天气.tools.get_weather_forecast",
+        Mock(side_effect=error),
+    )
+
+    result = handle_tool_call(valid_weather_call)
+
+    assert result.error == "天气查询过于频繁，请稍后再试"
