@@ -60,6 +60,8 @@ def request_json(
             )
             time.sleep(RETRY_DELAY_SECONDS)
 
+    # MAX_ATTEMPTS 已保证至少为 1；正常情况下循环只会返回或抛出异常。
+    raise AssertionError("天气请求循环意外结束")
 
 
 def search_city(city: str) -> dict:
