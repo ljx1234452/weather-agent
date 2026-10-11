@@ -41,6 +41,17 @@ def initialize_database() -> None:
 
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS session_keys (
+                key_hash TEXT PRIMARY KEY NOT NULL,
+                session_id TEXT NOT NULL,
+                FOREIGN KEY (session_id)
+                    REFERENCES sessions(session_id)
+            )
+            """
+        )
+
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
@@ -61,6 +72,42 @@ def save_session(session_id: str) -> None:
             """,
             (session_id,),
         )
+
+def save_session_with_key(
+    session_id: str,
+    key_hash: str,
+) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            "INSERT INTO sessions (session_id) VALUES (?)",
+            (session_id,),
+        )
+
+        connection.execute(
+            """
+            INSERT INTO session_keys (key_hash, session_id)
+            VALUES (?, ?)
+            """,
+            (key_hash, session_id),
+        )
+
+def find_session_id_by_key_hash(
+    key_hash: str,
+) -> str | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT session_id
+            FROM session_keys
+            WHERE key_hash = ?
+            """,
+            (key_hash,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return row[0]
 
 def save_message(
     session_id: str,

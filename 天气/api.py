@@ -11,10 +11,14 @@ from typing import cast
 from uuid import uuid4
 from 天气.database import (
     initialize_database,
-    save_session,
+    save_session_with_key,
     save_chat_messages,
     load_messages,
-    session_exists,
+    find_session_id_by_key_hash,
+)
+from 天气.access_keys import (
+    create_conversation_key,
+    hash_conversation_key,
 )
 
 
@@ -32,20 +36,6 @@ initialize_database()
 
 class ChatRequest(BaseModel):
     message: str
-    session_id: str
-
-    @field_validator("session_id")
-    @classmethod
-    def clean_session_id(
-        cls,
-        session_id: str,
-    ) -> str:
-        cleaned_session_id = session_id.strip()
-
-        if cleaned_session_id == "":
-            raise ValueError("会话编号不能为空")
-
-        return cleaned_session_id
 
     @field_validator("message")
     @classmethod
@@ -59,6 +49,7 @@ class ChatRequest(BaseModel):
 
 class SessionResponse(BaseModel):
     session_id: str
+    conversation_key: str
 
 class HistoryResponse(BaseModel):
     session_id: str
@@ -67,6 +58,34 @@ class HistoryResponse(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
 
+def require_chat_access_key(x_chat_key: str | None) -> None:
+    expected_key = os.getenv("CHAT_ACCESS_KEY")
+
+    if not expected_key:
+        raise HTTPException(status_code=503, detail="聊天访问口令未配置")
+
+    if x_chat_key != expected_key:
+        raise HTTPException(status_code=401, detail="聊天访问口令错误")
+
+def require_conversation_key(
+    conversation_key: str | None,
+) -> str:
+    if not conversation_key:
+        raise HTTPException(
+            status_code=401,
+            detail="缺少对话钥匙",
+        )
+
+    key_hash = hash_conversation_key(conversation_key)
+    session_id = find_session_id_by_key_hash(key_hash)
+
+    if session_id is None:
+        raise HTTPException(
+            status_code=401,
+            detail="对话钥匙无效",
+        )
+
+    return session_id
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -77,12 +96,21 @@ def health() -> dict[str, str]:
     response_model=SessionResponse,
     status_code=201,
 )
-def create_session() -> SessionResponse:
+def create_session(
+    x_chat_key: str | None = Header(default=None),
+) -> SessionResponse:
+    require_chat_access_key(x_chat_key)
+
     logger.info("开始创建会话")
     session_id = str(uuid4())
+    conversation_key = create_conversation_key(session_id)
+    key_hash = hash_conversation_key(conversation_key)
 
     try:
-        save_session(session_id)
+        save_session_with_key(
+            session_id=session_id,
+            key_hash=key_hash,
+        )
     except sqlite3.Error:
         logger.exception(f"会话保存失败：session_id={session_id}")
         raise
@@ -90,21 +118,18 @@ def create_session() -> SessionResponse:
     logger.info(f"会话保存成功：session_id={session_id}")
 
     return SessionResponse(
-        session_id=session_id
+        session_id=session_id,
+        conversation_key=conversation_key,
     )
 
 @app.get(
-    "/sessions/{session_id}/history",
+    "/history",
     response_model=HistoryResponse,
 )
 def get_session_history(
-    session_id: str,
+    x_conversation_key: str | None = Header(default=None),
 ) -> HistoryResponse:
-    if not session_exists(session_id):
-        raise HTTPException(
-            status_code=404,
-            detail="会话编号不存在",
-        )
+    session_id = require_conversation_key(x_conversation_key)
 
     return HistoryResponse(
         session_id=session_id,
@@ -114,40 +139,20 @@ def get_session_history(
 @app.post("/chat", response_model=ChatResponse)
 def chat(
     request: ChatRequest,
-    x_chat_key: str | None = Header(default=None),
+    x_conversation_key: str | None = Header(default=None),
 ) -> ChatResponse:
-    expected_key = os.getenv("CHAT_ACCESS_KEY")
-    if not expected_key:
-        raise HTTPException(status_code=503, detail="聊天访问口令未配置")
-    if x_chat_key != expected_key:
-        raise HTTPException(status_code=401, detail="聊天访问口令错误")
-    logger.info(f"开始处理聊天请求：session_id={request.session_id}")
+    session_id = require_conversation_key(x_conversation_key)
 
-    try:
-        exists = session_exists(request.session_id)
-    except sqlite3.Error:
-        logger.exception(
-            f"检查会话是否存在失败：session_id={request.session_id}"
-        )
-        raise
-
-    if not exists:
-        logger.warning(
-            f"聊天请求被拒绝，会话编号不存在：session_id={request.session_id}"
-        )
-        raise HTTPException(
-            status_code=404,
-            detail="会话编号不存在",
-        )
+    logger.info(f"开始处理聊天请求：session_id={session_id}")
 
     try:
         history = cast(
             list[ChatCompletionMessageParam],
-            load_messages(request.session_id),
+            load_messages(session_id),
         )
     except sqlite3.Error:
         logger.exception(
-            f"读取历史消息失败：session_id={request.session_id}"
+            f"读取历史消息失败：session_id={session_id}"
         )
         raise
 
@@ -158,40 +163,40 @@ def chat(
         )
 
     except RateLimitError:
-        logger.exception(f"模型额度不足或请求过于频繁：session_id={request.session_id}")
+        logger.exception(f"模型额度不足或请求过于频繁：session_id={session_id}")
         raise HTTPException(
             status_code=503,
             detail="模型额度不足，或者请求过于频繁",
         )
 
     except OpenAIError:
-        logger.exception(f"模型服务调用失败：session_id={request.session_id}")
+        logger.exception(f"模型服务调用失败：session_id={session_id}")
         raise HTTPException(
             status_code=503,
             detail="模型服务暂时不可用",
         )
 
     except ModelConfigurationError as error:
-        logger.exception(f"模型配置错误：session_id={request.session_id}")
+        logger.exception(f"模型配置错误：session_id={session_id}")
         raise HTTPException(
             status_code=503,
             detail=str(error),
         )
 
-    logger.info(f"Agent 回复生成成功：session_id={request.session_id}")
+    logger.info(f"Agent 回复生成成功：session_id={session_id}")
 
     try:
         save_chat_messages(
-            session_id=request.session_id,
+            session_id=session_id,
             user_content=request.message,
             assistant_content=answer,
         )
     except sqlite3.Error:
         logger.exception(
-            f"聊天消息保存失败：session_id={request.session_id}"
+            f"聊天消息保存失败：session_id={session_id}"
         )
         raise
 
-    logger.info(f"聊天消息保存成功：session_id={request.session_id}")
+    logger.info(f"聊天消息保存成功：session_id={session_id}")
 
     return ChatResponse(answer=answer)
